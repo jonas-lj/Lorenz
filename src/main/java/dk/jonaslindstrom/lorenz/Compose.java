@@ -6,13 +6,21 @@ import dk.jonaslindstrom.mosef.modules.melody.Track;
 import dk.jonaslindstrom.mosef.modules.scales.Scale;
 import dk.jonaslindstrom.mosef.modules.scales.ScaleFactory;
 import dk.jonaslindstrom.mosef.modules.scales.ScaleFactory.Key;
+import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Random;
 import java.util.function.Consumer;
 import java.util.stream.IntStream;
 import javax.sound.midi.InvalidMidiDataException;
+import org.apache.commons.configuration2.Configuration;
+import org.apache.commons.configuration2.PropertiesConfiguration;
+import org.apache.commons.configuration2.builder.FileBasedConfigurationBuilder;
+import org.apache.commons.configuration2.builder.fluent.Parameters;
+import org.apache.commons.configuration2.convert.LegacyListDelimiterHandler;
+import org.apache.commons.configuration2.ex.ConfigurationException;
 import org.apache.commons.math3.geometry.euclidean.oned.Interval;
 import org.apache.commons.math3.geometry.euclidean.threed.Vector3D;
 import org.apache.commons.math3.util.FastMath;
@@ -20,28 +28,37 @@ import org.apache.commons.math3.util.FastMath;
 public class Compose {
 
   public static void main(String[] args)
-      throws InvalidMidiDataException, IOException {
+      throws InvalidMidiDataException, IOException, ConfigurationException {
+
+    FileBasedConfigurationBuilder<PropertiesConfiguration> builder =
+        new FileBasedConfigurationBuilder<>(PropertiesConfiguration.class)
+            .configure(new Parameters().properties().setFile(new File("lorenz.properties")).setListDelimiterHandler(new LegacyListDelimiterHandler(',')));
+    Configuration config = builder.getConfiguration();
 
     // Configuration
-    int voices = 3; // The number of voices to output
-    double length = 480; // Target length in seconds with 120 bpm
-    long seed = 6674089274190705457L;
-    Scale scale = ScaleFactory.minor(Key.C);
-    int k = 7; // Map every k'th step of the integrator to a note
-    double t1 = 100; // should be large enough to fit target length
-    Random random = new Random(seed);
+    int voices = config.getInt("voices");
+    double length = config.getDouble("length");
+    long seed = config.getLong("seed");
+    int k = config.getInt("k");
+    double t1 = 2 * length; // should be large enough to fit target length. Longest possible note is 2 seconds
 
     // Parameters for sampling initial points
-    double[] μ = {20, 30, 30};
-    double[] σ = {20, 20, 20};
+    double[] μ = Arrays.stream(config.getStringArray("mu")).mapToDouble(Double::valueOf).toArray();
+    double[] σ = Arrays.stream(config.getStringArray("sigma")).mapToDouble(Double::valueOf).toArray();
+
+    Scale scale = ScaleFactory.minor(Key.C);
+    Random random = new Random(seed);
 
     // Define the Lorenz system
-    LorenzEquations equations = new LorenzEquations(10, 28, 2);
+    LorenzEquations equations = new LorenzEquations(
+        config.getDouble("s"),
+        config.getDouble("r"),
+        config.getDouble("b"));
 
     // Generate tracks
     for (int v = 0; v < voices; v++) {
       Track track = new Track();
-      Vector3D init = new Vector3D(IntStream.range(0, 3).sequential()
+      Vector3D init = new Vector3D(IntStream.range(0, 3 /* dimensions */).sequential()
           .mapToDouble(i -> random.nextGaussian() * σ[i] + μ[i]).toArray());
 
       List<Interval> range = new ArrayList<>();
@@ -66,7 +83,7 @@ public class Compose {
   /**
    * Map a point on the curve to a note at time t using the given scale.
    */
-  public static Note mapToNote(Vector3D point, double t, Scale scale, Interval y,
+  private static Note mapToNote(Vector3D point, double t, Scale scale, Interval y,
       Interval z) {
     double ticks = FastMath.floor(Util.mapToRange(point.getY(), y, new Interval(-1, 4)));
     double duration = FastMath.pow(2, -ticks);
